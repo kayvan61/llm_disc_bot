@@ -27,6 +27,27 @@ class ChatCog(commands.Cog):
             return model, remaining.strip()
         return self.current_model, message
 
+    async def _send_ai_response(self, ctx, msg, ai_response: str):
+        """Send or edit message with AI response, handling chunking and filtering.
+        
+        Removes content before reasoning/thinking tags and splits responses over 2000 chars.
+        """
+        for tag in ["</thinking>", "</reasoning>", "</think>"]:
+            if tag in ai_response:
+                ai_response = ai_response.split(tag)[-1]
+                break
+
+        MAX_MSG_LEN = 1000
+        if len(ai_response) <= MAX_MSG_LEN:
+            await msg.edit(content=f'🤖 {ai_response}')
+        else:
+            chunks = [ai_response[i:i+MAX_MSG_LEN] for i in range(0, len(ai_response), MAX_MSG_LEN)]
+            for idx, chunk in enumerate(chunks):
+                if idx == 0:
+                    await msg.edit(content=f'🤖 {chunk}')
+                else:
+                    await ctx.send(chunk)
+
     @commands.command(name='chat_history', aliases=['chat_hist', 'history_chat'])
     async def chat_history(self, ctx, num_messages: int, *, message: str):
         """Responds to the user using the OpenAI-compatible LLM with chat history"""
@@ -87,7 +108,8 @@ class ChatCog(commands.Cog):
                         ai_response = data.get("choices", [{}])[0].get("message", {}).get("content", "No response from AI")
                         
                         logger.info(f'AI response received: {ai_response[:100]}...')
-                        await thinking_msg.edit(content=f'🤖 {ai_response}')
+                        
+                        await self._send_ai_response(ctx, thinking_msg, ai_response)
                     else:
                         error_text = await response.text()
                         logger.error(f'LLM API error: {response.status} - {error_text}')
@@ -135,7 +157,8 @@ class ChatCog(commands.Cog):
                         ai_response = data.get("choices", [{}])[0].get("message", {}).get("content", "No response from AI")
                         
                         logger.info(f'AI response received: {ai_response[:100]}...')
-                        await msg.edit(content=f'🤖 {ai_response}')
+                        
+                        await self._send_ai_response(ctx, msg, ai_response)
                     else:
                         error_text = await response.text()
                         logger.error(f'LLM API error: {response.status} - {error_text}')
