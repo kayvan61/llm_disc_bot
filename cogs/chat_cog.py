@@ -50,7 +50,7 @@ class ChatCog(commands.Cog):
             messages = messages[::-1]
             messages = messages[:-1]
 
-            await ctx.send("🤔 Thinking...")
+            thinking_msg = await ctx.send("🤔 Thinking...")
             
             user_names = set()
             history_messages = []
@@ -87,18 +87,18 @@ class ChatCog(commands.Cog):
                         ai_response = data.get("choices", [{}])[0].get("message", {}).get("content", "No response from AI")
                         
                         logger.info(f'AI response received: {ai_response[:100]}...')
-                        await ctx.send(f'🤖 {ai_response}')
+                        await thinking_msg.edit(content=f'🤖 {ai_response}')
                     else:
                         error_text = await response.text()
                         logger.error(f'LLM API error: {response.status} - {error_text}')
-                        await ctx.send(f'Error from AI server: {response.status}')
+                        await thinking_msg.edit(content=f'Error from AI server: {response.status}')
 
         except aiohttp.ClientError as e:
             logger.error(f'Network error calling LLM: {str(e)}')
-            await ctx.send(f'Network error: {str(e)}')
+            await thinking_msg.edit(content=f'Network error: {str(e)}')
         except Exception as e:
             logger.error(f'Error in chat_history command: {str(e)}')
-            await ctx.send(f'Error: {str(e)}')
+            await thinking_msg.edit(content=f'Error: {str(e)}')
 
     @commands.command(name='chat', aliases=['ask', 'ai'])
     async def chat(self, ctx, *, message: str):
@@ -115,7 +115,7 @@ class ChatCog(commands.Cog):
                 return
 
             # Send a message to the user that we're thinking
-            await ctx.send("🤔 Thinking...")
+            msg = await ctx.send("🤔 Thinking...")
 
             # Prepare the payload
             payload = {
@@ -135,18 +135,18 @@ class ChatCog(commands.Cog):
                         ai_response = data.get("choices", [{}])[0].get("message", {}).get("content", "No response from AI")
                         
                         logger.info(f'AI response received: {ai_response[:100]}...')
-                        await ctx.send(f'🤖 {ai_response}')
+                        await msg.edit(content=f'🤖 {ai_response}')
                     else:
                         error_text = await response.text()
                         logger.error(f'LLM API error: {response.status} - {error_text}')
-                        await ctx.send(f'Error from AI server: {response.status}')
+                        await msg.edit(content=f'Error from AI server: {response.status}')
 
         except aiohttp.ClientError as e:
             logger.error(f'Network error calling LLM: {str(e)}')
-            await ctx.send(f'Network error: {str(e)}')
+            await msg.edit(content=f'Network error: {str(e)}')
         except Exception as e:
             logger.error(f'Error in chat command: {str(e)}')
-            await ctx.send(f'Error: {str(e)}')
+            await msg.edit(content=f'Error: {str(e)}')
 
     @commands.command(name='models', aliases=['list_models', 'available_models'])
     async def models(self, ctx):
@@ -155,7 +155,7 @@ class ChatCog(commands.Cog):
             logger.info(f'Models command invoked by {ctx.author}')
 
             # Send a message to the user that we're fetching models
-            await ctx.send("🔍 Fetching available models...")
+            msg = await ctx.send("🔍 Fetching available models...")
 
             # Send GET request to fetch models
             async with aiohttp.ClientSession() as session:
@@ -166,22 +166,22 @@ class ChatCog(commands.Cog):
                         
                         if models:
                             model_list = "\n".join([f"  - {model.get('id', 'Unknown')}" for model in models])
-                            await ctx.send(f"🤖 Available models:\n{model_list}")
+                            await msg.edit(content=f"🤖 Available models:\n{model_list}")
                         else:
-                            await ctx.send("No models found from the AI server.")
+                            await msg.edit(content="No models found from the AI server.")
                         
                         logger.info(f'Models fetched: {len(models)} models available')
                     else:
                         error_text = await response.text()
                         logger.error(f'Models API error: {response.status} - {error_text}')
-                        await ctx.send(f'Error fetching models: {response.status}')
+                        await msg.edit(content=f'Error fetching models: {response.status}')
 
         except aiohttp.ClientError as e:
             logger.error(f'Network error fetching models: {str(e)}')
-            await ctx.send(f'Network error: {str(e)}')
+            await msg.edit(content=f'Network error: {str(e)}')
         except Exception as e:
             logger.error(f'Error in models command: {str(e)}')
-            await ctx.send(f'Error: {str(e)}')
+            await msg.edit(content=f'Error: {str(e)}')
 
     @commands.command(name='load', aliases=['load_model', 'use_model'])
     async def load(self, ctx, model: str):
@@ -190,33 +190,14 @@ class ChatCog(commands.Cog):
             logger.info(f'Load command invoked by {ctx.author}: {model}')
 
             # Send a message to the user that we're loading the model
-            await ctx.send(f"📦 Loading model: `{model}`...")
+            msg = await ctx.send(f"📦 Loading model: `{model}`...")
 
-            # Prepare the payload
-            payload = {
-                "model": model
-            }
+            self.current_model = model
+            await msg.edit(content=f"default using model: `{model}` :)")
 
-            # Send POST request to load model
-            async with aiohttp.ClientSession() as session:
-                async with session.post(f"{self.llm_url}/models/load", json=payload) as response:
-                    if response.status == 200:
-                        data = await response.json()
-                        status = data.get("status", "Loaded")
-                        self.current_model = model
-                        await ctx.send(f"✅ Model `{model}` loaded successfully! This will be used for future chat commands.")
-                        logger.info(f'Model {model} loaded successfully')
-                    else:
-                        error_text = await response.text()
-                        logger.error(f'Load model API error: {response.status} - {error_text}')
-                        await ctx.send(f'Error loading model: {response.status}')
-
-        except aiohttp.ClientError as e:
-            logger.error(f'Network error loading model: {str(e)}')
-            await ctx.send(f'Network error: {str(e)}')
         except Exception as e:
             logger.error(f'Error in load command: {str(e)}')
-            await ctx.send(f'Error: {str(e)}')
+            await msg.edit(content=f'Error: {str(e)}')
 
 async def setup(bot):
     """Setup function for the cog - called by the bot"""
