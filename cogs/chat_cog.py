@@ -41,7 +41,37 @@ class ChatCog(commands.Cog):
         if len(ai_response) <= MAX_MSG_LEN:
             await msg.edit(content=f'🤖 {ai_response}')
         else:
-            chunks = [ai_response[i:i+MAX_MSG_LEN] for i in range(0, len(ai_response), MAX_MSG_LEN)]
+            chunks = []
+            lines = ai_response.split('\n')
+            current_chunk = ""
+            
+            for line in lines:
+                if len(current_chunk) + len(line) + 1 <= MAX_MSG_LEN:
+                    if current_chunk:
+                        current_chunk += '\n' + line
+                    else:
+                        current_chunk = line
+                else:
+                    if current_chunk:
+                        chunks.append(current_chunk)
+                    if len(line) <= MAX_MSG_LEN:
+                        current_chunk = line
+                    else:
+                        words = line.split()
+                        current_chunk = ""
+                        for word in words:
+                            if len(current_chunk) + len(word) + 1 <= MAX_MSG_LEN:
+                                if current_chunk:
+                                    current_chunk += ' ' + word
+                                else:
+                                    current_chunk = word
+                            else:
+                                if current_chunk:
+                                    chunks.append(current_chunk)
+                                current_chunk = word
+            if current_chunk:
+                chunks.append(current_chunk)
+            
             for idx, chunk in enumerate(chunks):
                 if idx == 0:
                     await msg.edit(content=f'🤖 {chunk}')
