@@ -11,14 +11,18 @@ class ChatCog(commands.Cog):
     """A cog that handles chat interactions with an OpenAI-compatible LLM"""
 
     def __init__(self, bot):
+        import json
         """Initialize the cog with the bot instance"""
+        with open("model_env") as f:
+            model_env = json.load(f)
+            assert "system_prompt" in model_env.keys()
+            assert "llm_url" in model_env.keys()
+            assert "default_model" in model_env.keys()
+
         self.bot = bot
-        self.llm_url = "http://192.168.1.148:8080/v1"
-        self.current_model = "nv-nemotron-30b"
-        self.system_prompt = f"You are a helpful assistant " +\
-                              "participating in a group chat " +\
-                              "with multiple users. " +\
-                              "consider the last send message as the request you are answering to."
+        self.llm_url = f"{model_env['llm_url']}/v1"
+        self.current_model = model_env['default_model']
+        self.system_prompt = model_env['system_prompt']
         self.tools = tool_router.open_ai_tool_list()
         logger.info('ChatCog initialized')
 
@@ -84,12 +88,12 @@ class ChatCog(commands.Cog):
             if self.bot.user in message.mentions:
                 await self.handle_reply_chain(message)
 
-    
-    # ctx, message to edit, what to say, message to reply if any
+   
     async def _send_ai_response(self, ctx, msg, ai_response: str, reply_to=None):
         """Send or edit message with AI response, handling chunking and filtering.
-        
-        Removes content before reasoning/thinking tags and splits responses over 2000 chars.
+
+        Removes content before reasoning/thinking tags and splits responses over limits,
+        safely handling multiline markdown code blocks without language tags.
         """
         logger.info(f"raw ai reply is: {ai_response}")
         for tag in ["</thinking>", "</reasoning>", "</think>"]:
@@ -103,6 +107,7 @@ class ChatCog(commands.Cog):
             await msg.delete()
 
         MAX_MSG_LEN = 1000
+        
         if len(ai_response) <= MAX_MSG_LEN:
             if reply_to:
                 await ctx.reply(f'{ai_response}')
@@ -113,42 +118,70 @@ class ChatCog(commands.Cog):
             lines = ai_response.split('\n')
             current_chunk = ""
             
+            in_code_block = False
+
             for line in lines:
-                if len(current_chunk) + len(line) + 1 <= MAX_MSG_LEN:
+                is_toggle_line = False
+                # Check if this line opens or closes a code block
+                if line.strip().startswith("```"):
+                    is_toggle_line = True
+                    in_code_block = not in_code_block
+
+                # Reserve space to close the block if we are forced to break the chunk early
+                closing_padding = 4 if (in_code_block and not is_toggle_line) else 0
+
+                if len(current_chunk) + len(line) + 1 + closing_padding <= MAX_MSG_LEN:
                     if current_chunk:
                         current_chunk += '\n' + line
                     else:
                         current_chunk = line
                 else:
+                    # Current chunk is full, wrap it up
                     if current_chunk:
+                        if in_code_block and not is_toggle_line:
+                            current_chunk += '\n```'
                         chunks.append(current_chunk)
-                    if len(line) <= MAX_MSG_LEN:
-                        current_chunk = line
+                    
+                    # Start the next chunk (without language identifiers)
+                    prefix = "```\n" if (in_code_block and not is_toggle_line) else ""
+                    
+                    if len(prefix) + len(line) <= MAX_MSG_LEN:
+                        current_chunk = prefix + line
                     else:
+                        # Fallback: Word-splitting for single lines that exceed MAX_MSG_LEN on their own
                         words = line.split()
-                        current_chunk = ""
+                        current_chunk = prefix
                         for word in words:
-                            if len(current_chunk) + len(word) + 1 <= MAX_MSG_LEN:
-                                if current_chunk:
+                            if len(current_chunk) + len(word) + 1 + closing_padding <= MAX_MSG_LEN:
+                                if current_chunk and current_chunk != prefix:
                                     current_chunk += ' ' + word
                                 else:
-                                    current_chunk = word
+                                    current_chunk += word
                             else:
                                 if current_chunk:
+                                    if in_code_block:
+                                        current_chunk += '\n```'
                                     chunks.append(current_chunk)
-                                current_chunk = word
-            if current_chunk:
-                chunks.append(current_chunk)
+                                current_chunk = prefix + word
             
+            # Add the final chunk
+            if current_chunk:
+                if in_code_block and not current_chunk.strip().endswith("```"):
+                    current_chunk += '\n```'
+                chunks.append(current_chunk)
+
+            # Send chunks
             for idx, chunk in enumerate(chunks):
                 if idx == 0:
                     if reply_to:
-                        context = await self.bot.get_context(reply_to) 
-                        new_msg = await context.reply(f'{chunk}')
+                        context = await self.bot.get_context(reply_to)
+                        new_msg = await context.reply(chunk)
                     else:
-                        new_msg = await msg.edit(content=f'{chunk}')
+                        new_msg = await msg.edit(content=chunk)
                 else:
                     new_msg = await ctx.reply(chunk)
+                
+                # Update context for the next reply to chain correctly
                 ctx = await self.bot.get_context(new_msg)
 
 
@@ -206,8 +239,11 @@ class ChatCog(commands.Cog):
                             tool_name = tc['function']['name']
                             tool_call_id = tc['id']
                             tool_arguments_str = tc['function']['arguments']
-                            tool_arguments_dict = json.loads(tool_arguments_str)
-                            tool_result = await tool_router.route_tool(tool_name, **tool_arguments_dict)
+                            if tool_name not in tool_router.get_all_tool_names():
+                                tool_results = [("result", "invalid tool call!")]
+                            else:
+                                tool_arguments_dict = json.loads(tool_arguments_str)
+                                tool_result = await tool_router.route_tool(tool_name, **tool_arguments_dict)
                             tool_result_dict = {
                                 "results" : [{x:y} for x,y in tool_result],
                             }
@@ -322,7 +358,7 @@ class ChatCog(commands.Cog):
                         
                         if models:
                             model_list = "\n".join([f"  - {model.get('id', 'Unknown')}" for model in models])
-                            await msg.edit(content=f"🤖 Available models:\n{model_list}")
+                            await msg.edit(content=f"🤖 Available models:\n{model_list}\nCurrent model: {self.current_model}")
                         else:
                             await msg.edit(content="No models found from the AI server.")
                         
